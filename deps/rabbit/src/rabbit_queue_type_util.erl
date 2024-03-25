@@ -13,6 +13,7 @@
          check_exclusive/1,
          check_non_durable/1,
          run_checks/2,
+         grow/6,
          erpc_call/5]).
 
 -include_lib("rabbit_common/include/rabbit.hrl").
@@ -98,3 +99,61 @@ erpc_call(Node, M, F, A, Timeout) ->
         false ->
             {error, noconnection}
     end.
+
+
+-spec grow(atom(), node(), binary(), binary(), all | even, noop|voter|non_voter|promotable) ->
+    [{rabbit_amqqueue:name(),
+      {ok, pos_integer()} | {error, pos_integer(), term()}}].
+grow(Type, Node, VhostSpec, QueueSpec, Strategy, Membership) ->
+    Running = rabbit_nodes:list_running(),
+    [begin
+         Size = length(get_nodes(Q)),
+         QName = amqqueue:get_name(Q),
+         rabbit_log:info("~ts: adding a new member (replica) on node ~w",
+                         [rabbit_misc:rs(QName), Node]),
+         AddFun = add_fun(Q, Node, Membership),
+         case AddFun() of
+             ok ->
+                 {QName, {ok, Size + 1}};
+             {error, Err} ->
+                 rabbit_log:warning(
+                   "~ts: failed to add member (replica) on node ~w, error: ~w",
+                   [rabbit_misc:rs(QName), Node, Err]),
+                 {QName, {error, Size, Err}}
+         end
+     end
+     || Q <- rabbit_amqqueue:list(),
+        %% don't add a member if there is already one on the node
+        amqqueue:get_type(Q) == Type,
+        not lists:member(Node, get_nodes(Q)),
+        %% node needs to be running
+        lists:member(Node, Running),
+        matches_strategy(Strategy, get_nodes(Q)),
+        is_match(amqqueue:get_vhost(Q), VhostSpec) andalso
+            is_match(get_resource_name(amqqueue:get_name(Q)), QueueSpec)].
+
+
+add_fun(Q, Node, _) when ?amqqueue_is_stream(Q) ->
+    fun() ->
+            rabbit_stream_coordinator:add_replica(Q, Node)
+    end;
+add_fun(Q, Node, Membership) when ?amqqueue_is_quorum(Q) ->
+    fun() ->
+            rabbit_quorum_queue:add_member(Q, Node, Membership)
+    end;
+add_fun(Q, _Node, _) ->
+    {error, io_lib:format("Unsupported queue type ~p",[amqqueue:get_type(Q)])}.
+
+get_nodes(Q) ->
+    #{nodes := Nodes} = amqqueue:get_type_state(Q),
+    Nodes.
+
+matches_strategy(all, _) -> true;
+matches_strategy(even, Members) ->
+    length(Members) rem 2 == 0.
+
+is_match(Subj, E) ->
+   nomatch /= re:run(Subj, E).
+
+get_resource_name(#resource{name  = Name}) ->
+    Name.

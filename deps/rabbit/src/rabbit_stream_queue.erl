@@ -29,6 +29,7 @@
          info/2,
          queue_length/1,
          get_replicas/1,
+         grow/4,
          transfer_leadership/2,
          init/1,
          close/1,
@@ -996,6 +997,11 @@ restart_stream(VHost, Queue, Options)
             E
     end.
 
+-spec grow(node(), binary(), binary(), all | even) ->
+    [{rabbit_amqqueue:name(),
+      {ok, pos_integer()} | {error, pos_integer(), term()}}].
+grow(Node, VHostSpec, QueueSpec, Strategy) ->
+    rabbit_queue_type_util:grow(?MODULE, Node, VHostSpec, QueueSpec, Strategy, noop).
 
 add_replica(VHost, Name, Node) ->
     QName = rabbit_misc:r(VHost, queue, Name),

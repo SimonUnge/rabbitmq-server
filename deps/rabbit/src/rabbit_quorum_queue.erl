@@ -1337,32 +1337,8 @@ grow(Node, VhostSpec, QueueSpec, Strategy) ->
 -spec grow(node(), binary(), binary(), all | even, membership()) ->
     [{rabbit_amqqueue:name(),
       {ok, pos_integer()} | {error, pos_integer(), term()}}].
-grow(Node, VhostSpec, QueueSpec, Strategy, Membership) ->
-    Running = rabbit_nodes:list_running(),
-    [begin
-         Size = length(get_nodes(Q)),
-         QName = amqqueue:get_name(Q),
-         rabbit_log:info("~ts: adding a new member (replica) on node ~w",
-                         [rabbit_misc:rs(QName), Node]),
-         case add_member(Q, Node, Membership) of
-             ok ->
-                 {QName, {ok, Size + 1}};
-             {error, Err} ->
-                 rabbit_log:warning(
-                   "~ts: failed to add member (replica) on node ~w, error: ~w",
-                   [rabbit_misc:rs(QName), Node, Err]),
-                 {QName, {error, Size, Err}}
-         end
-     end
-     || Q <- rabbit_amqqueue:list(),
-        amqqueue:get_type(Q) == ?MODULE,
-        %% don't add a member if there is already one on the node
-        not lists:member(Node, get_nodes(Q)),
-        %% node needs to be running
-        lists:member(Node, Running),
-        matches_strategy(Strategy, get_nodes(Q)),
-        is_match(amqqueue:get_vhost(Q), VhostSpec) andalso
-        is_match(get_resource_name(amqqueue:get_name(Q)), QueueSpec) ].
+grow(Node, VHostSpec, QueueSpec, Strategy, Membership) ->
+    rabbit_queue_type_util:grow(?MODULE, Node, VHostSpec, QueueSpec, Strategy, Membership).
 
 -spec transfer_leadership(amqqueue:amqqueue(), node()) -> {migrated, node()} | {not_migrated, atom()}.
 transfer_leadership(Q, Destination) ->
@@ -1394,16 +1370,6 @@ queue_length(Q) ->
 
 get_replicas(Q) ->
     get_nodes(Q).
-
-get_resource_name(#resource{name  = Name}) ->
-    Name.
-
-matches_strategy(all, _) -> true;
-matches_strategy(even, Members) ->
-    length(Members) rem 2 == 0.
-
-is_match(Subj, E) ->
-   nomatch /= re:run(Subj, E).
 
 file_handle_leader_reservation(QName) ->
     try
